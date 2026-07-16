@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src * data:; media-src * data: blob:; connect-src *; worker-src blob:; object-src 'none'; base-uri 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0b10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>TELLY &mdash; Live English TV</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+</head>
+<body>
+
+<header class="app-header" id="appHeader">
+  <div class="header-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <span class="brand-mark">📺</span>
+        <span class="brand-name">TELLY</span>
+        <span class="brand-tag">Live English TV</span>
+      </div>
+      <button class="icon-btn" id="refreshBtn" title="Refresh channel list" aria-label="Refresh channel list">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+      </button>
+    </div>
+
+    <div class="search-row">
+      <div class="search">
+        <svg class="search-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="searchInput" type="search" placeholder="Search 3,000+ channels…" autocomplete="off" spellcheck="false" enterkeyhint="search">
+        <button class="search-clear" id="searchClear" aria-label="Clear search">✕</button>
+      </div>
+    </div>
+
+    <nav class="chips" id="chips" aria-label="Categories"></nav>
+
+    <div class="toolbar" id="toolbar">
+      <div class="seg" role="group" aria-label="View mode">
+        <button data-view="grid" class="seg-btn" title="Card grid">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+        </button>
+        <button data-view="wall" class="seg-btn" title="Logo wall">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="9.5" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="9.5" width="5" height="5" rx="1"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><rect x="16" y="9.5" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><rect x="9.5" y="16" width="5" height="5" rx="1"/><rect x="16" y="16" width="5" height="5" rx="1"/></svg>
+        </button>
+        <button data-view="list" class="seg-btn" title="Detailed list">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="5" height="5" rx="1"/><path d="M11 5.5h10M11 8h6"/><rect x="3" y="14" width="5" height="5" rx="1"/><path d="M11 15.5h10M11 18h6"/></svg>
+        </button>
+      </div>
+
+      <div class="zoomer" id="zoomer" title="Thumbnail size — you can also pinch the grid">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8.5 11h5"/></svg>
+        <input type="range" id="zoomRange" min="0.55" max="2.2" step="0.05" value="1" aria-label="Thumbnail zoom">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8.5 11h5M11 8.5v5"/></svg>
+      </div>
+
+      <select id="countrySelect" class="country" aria-label="Filter by country">
+        <option value="all">🌍 All countries</option>
+      </select>
+    </div>
+  </div>
+</header>
+
+<main class="main">
+  <p class="count" id="countLine">Loading channels…</p>
+  <div class="grid view-grid" id="grid"></div>
+  <div class="sentinel" id="sentinel"></div>
+
+  <div class="empty hidden" id="emptyState">
+    <div class="empty-ico">📡</div>
+    <h2>No channels found</h2>
+    <p>Try a different search or category.</p>
+    <button class="btn" id="clearFilters">Clear all filters</button>
+  </div>
+
+  <div class="load-err hidden" id="loadError">
+    <div class="empty-ico">⚠️</div>
+    <h2>Couldn't load channels</h2>
+    <p>Check your internet connection — the channel list comes from iptv-org.</p>
+    <button class="btn" id="retryLoad">Try again</button>
+  </div>
+</main>
+
+<footer class="app-footer">
+  <p>Streams &amp; data from the open-source <a href="https://github.com/iptv-org/iptv" target="_blank" rel="noopener">iptv-org</a> project.
+  Some channels may be offline or geo-blocked in your region.</p>
+</footer>
+
+<!-- Player -->
+<div class="player hidden" id="player" role="dialog" aria-modal="true" aria-label="Video player">
+  <div class="player-head">
+    <button class="icon-btn player-close" id="playerClose" aria-label="Close player">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="player-title" id="playerTitle"></div>
+    <button class="icon-btn mv-add-btn" id="playerMV" title="Add to multiview" aria-label="Add to multiview">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13.5v7M13.5 17h7"/></svg>
+    </button>
+    <button class="icon-btn fav-toggle" id="playerFav" aria-label="Toggle favorite">♥</button>
+  </div>
+
+  <div class="video-wrap">
+    <video id="video" playsinline controls preload="auto"></video>
+    <div class="spinner" id="spinner"><div class="spin"></div><span>Tuning in…</span></div>
+    <div class="perror hidden" id="playerError">
+      <p><strong>This stream isn't responding.</strong><br>It may be offline right now or geo-blocked in your region.</p>
+      <div class="perror-btns">
+        <button class="btn" id="retryStream">Retry</button>
+        <button class="btn ghost" id="copyStream">Copy stream URL</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="player-info">
+    <div class="player-meta" id="playerMeta"></div>
+  </div>
+
+  <div class="related">
+    <h4 id="relatedTitle">More like this</h4>
+    <div class="related-row" id="relatedRow"></div>
+  </div>
+</div>
+
+<!-- Multiview -->
+<button class="mv-fab hidden" id="mvFab" aria-label="Open multiview">
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+  <span class="mv-badge" id="mvBadge">0</span>
+</button>
+
+<div class="mv hidden" id="mv" role="dialog" aria-modal="true" aria-label="Multiview">
+  <div class="mv-head">
+    <button class="icon-btn" id="mvClose" aria-label="Close multiview">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="mv-title">Multiview <span class="mv-info" id="mvInfo"></span></div>
+    <button class="btn ghost mv-small-btn" id="mvAddMore">＋ Add</button>
+    <button class="btn ghost mv-small-btn" id="mvClear">Clear</button>
+  </div>
+  <div class="mv-grid" id="mvGrid"></div>
+  <div class="mv-empty hidden" id="mvEmpty">
+    <div class="empty-ico">⊞</div>
+    <h2>Your video wall is empty</h2>
+    <p>Add channels and watch them side by side —<br>tap a tile to hear that channel.</p>
+    <button class="btn" id="mvPickBtn">Browse &amp; add channels</button>
+  </div>
+  <p class="mv-hint">Tap a tile for sound · ⛶ opens full player · keys 1–9 switch audio on the first 9</p>
+</div>
+
+<!-- Floating mini-player: keeps the audible multiview channel playing while picking -->
+<div class="pip-dock hidden" id="pipDock" title="Back to multiview">
+  <div class="pip-name" id="pipName"></div>
+  <button class="pip-close" id="pipClose" aria-label="Stop preview">✕</button>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="js/app.js?v=9"></script>
+</body>
+</html>
