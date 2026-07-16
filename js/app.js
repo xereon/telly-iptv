@@ -10,7 +10,10 @@ const SOURCES = [
   'https://iptv-org.github.io/iptv/countries/au.m3u',    // ensure every AU channel is included
 ];
 
-const STATUS_URL = 'status.json';      // daily stream check (see tools/check-streams.mjs)
+// Read straight from the repo rather than each deployment's own copy: the
+// daily workflow (see tools/check-streams.mjs) commits status.json, and both
+// the Vercel and Pages copies pick it up without either having to rebuild.
+const STATUS_URL = 'https://raw.githubusercontent.com/xereon/telly-iptv/main/status.json';
 const CACHE_KEY = 'telly.channels.v2'; // v2: religious channels excluded
 const PREFS_KEY = 'telly.prefs.v1';
 const FAVS_KEY  = 'telly.favs.v1';
@@ -58,8 +61,13 @@ const KEYWORD_CATS = [
  * Proxying costs bandwidth, so it's used only where needed: http streams,
  * streams status.json knows lack CORS, and as a retry after a network error.
  */
+// The relay is a Vercel function. The GitHub Pages copy is static, so it
+// borrows the same endpoint cross-origin (the function allows that origin).
+const PROXY_ORIGIN = location.hostname.endsWith('github.io')
+  ? 'https://telly-iptv.vercel.app'
+  : '';
 const canProxy = () => location.protocol === 'https:';
-const proxyUrl = (url) => '/api/proxy?url=' + encodeURIComponent(url);
+const proxyUrl = (url) => PROXY_ORIGIN + '/api/proxy?url=' + encodeURIComponent(url);
 
 const streamSrc = (url) =>
   canProxy() && (url.startsWith('http:') || state.noCors.has(url))

@@ -15,7 +15,20 @@ const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 // basic SSRF guard: no loopback / link-local / RFC1918 upstreams
 const PRIVATE_HOST = /^(localhost$|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[?::1?\]?$)/i;
 
+// The GitHub Pages copy is static — no functions — so it borrows this relay
+// cross-origin. Only the app's own deployments are allowed to do that; the
+// header is deliberately not '*', so other sites can't use it from a browser.
+const ALLOWED_ORIGINS = new Set([
+  'https://telly-iptv.vercel.app',
+  'https://xereon.github.io',
+]);
+
 module.exports = async (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
   const raw = req.query.url;
   let url;
   try { url = new URL(String(raw)); } catch { return res.status(400).send('invalid url'); }
