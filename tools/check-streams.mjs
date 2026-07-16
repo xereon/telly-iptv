@@ -213,8 +213,10 @@ const statusPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'status.j
 writeFileSync(statusPath, JSON.stringify({
   generated: new Date().toISOString(),
   checked: results.length,
+  // geo/auth failures stay visible, so only the count is shipped — every byte
+  // here is downloaded by every visitor
+  geoCount: broken.filter((b) => GEO_FAILURES.has(b.failure)).length,
   dead: broken.filter((b) => !GEO_FAILURES.has(b.failure)).map((b) => b.url),
-  geo: broken.filter((b) => GEO_FAILURES.has(b.failure)).map((b) => b.url),
   // alive, but no CORS header — the app must route these through /api/proxy
   noCors: results.filter((r) => r.ok && !r.corsOpen).map((r) => r.url),
 }));
