@@ -44,6 +44,15 @@ const KEYWORD_CATS = [
   [/\b(drama|series|novela)\b/i, 'Series'],
 ];
 
+// On HTTPS, browsers block plain-http media (mixed content). Those streams
+// are routed through the same-origin /api/proxy relay (Vercel function),
+// which fetches them server-side and rewrites manifests to stay proxied.
+// On plain-http hosting (localhost/XAMPP) streams always play direct.
+const streamSrc = (url) =>
+  (location.protocol === 'https:' && url.startsWith('http:'))
+    ? '/api/proxy?url=' + encodeURIComponent(url)
+    : url;
+
 const $ = (s) => document.querySelector(s);
 
 const el = {
@@ -432,7 +441,7 @@ function startStream(ch) {
       levelLoadingTimeOut: 12000,
       fragLoadingTimeOut: 20000,
     });
-    hls.loadSource(ch.url);
+    hls.loadSource(streamSrc(ch.url));
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
     hls.on(Hls.Events.ERROR, (_, data) => {
@@ -446,7 +455,7 @@ function startStream(ch) {
       showStreamError();
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = ch.url;
+    video.src = streamSrc(ch.url);
     video.play().catch(() => {});
     video.onerror = showStreamError;
   } else {
@@ -601,7 +610,7 @@ function mvStartTile(ch) {
       fragLoadingTimeOut: 20000,
     });
     let retried = false;
-    h.loadSource(ch.url);
+    h.loadSource(streamSrc(ch.url));
     h.attachMedia(video);
     h.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
     h.on(Hls.Events.ERROR, (_, data) => {
@@ -612,7 +621,7 @@ function mvStartTile(ch) {
     });
     mvPlayers.set(ch.url, h);
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = ch.url;
+    video.src = streamSrc(ch.url);
     video.onerror = fail;
     video.play().catch(() => {});
     mvPlayers.set(ch.url, null);
