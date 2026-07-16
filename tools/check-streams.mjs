@@ -15,7 +15,9 @@
  * tvg-id base, falling back to normalized name) whose stream checks out OK.
  *
  * Usage:  node check-streams.mjs [--limit N] [--concurrency N]
- * Output: report/stream-report.json (full), report/broken.csv (broken only)
+ * Output: ../status.json            compact + committed — the app reads this
+ *         report/stream-report.json full detail (gitignored)
+ *         report/broken.csv         broken only (gitignored)
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -199,7 +201,29 @@ writeFileSync(join(outDir, 'broken.csv'),
   'name,url,failure,http_status,suggested_replacement\n' +
   broken.map((b) => [csvEsc(b.name), csvEsc(b.url), b.failure, b.status || '', csvEsc(b.suggestedReplacement || '')].join(',')).join('\n'));
 
+/* status.json — the compact file the app fetches.
+ *
+ * `dead` is deliberately conservative. This runs from one location (a US CI
+ * runner), so 403/401 are usually geo-blocks or token gates that may work
+ * fine from the user's own network — those go in `geo` and stay visible.
+ * Only failures that mean the same thing from anywhere are hidden by default.
+ */
+const GEO_FAILURES = new Set(['403', '401']);
+const statusPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'status.json');
+writeFileSync(statusPath, JSON.stringify({
+  generated: new Date().toISOString(),
+  checked: results.length,
+  dead: broken.filter((b) => !GEO_FAILURES.has(b.failure)).map((b) => b.url),
+  geo: broken.filter((b) => GEO_FAILURES.has(b.failure)).map((b) => b.url),
+  // alive, but no CORS header — the app must route these through /api/proxy
+  noCors: results.filter((r) => r.ok && !r.corsOpen).map((r) => r.url),
+}));
+
+const nDead = broken.filter((b) => !GEO_FAILURES.has(b.failure)).length;
+const nGeo = broken.length - nDead;
 console.log(`\nDone in ${Math.round((Date.now() - t0) / 1000)}s — ${ok}/${results.length} OK, ${broken.length} broken`);
 console.log('By failure type:', JSON.stringify(byFailure, null, 2));
 console.log(`Replacements derived: ${broken.filter((b) => b.suggestedReplacement).length}`);
+console.log(`status.json: ${nDead} dead (hidden), ${nGeo} geo/auth (kept), ` +
+            `${results.filter((r) => r.ok && !r.corsOpen).length} need proxy`);
 console.log(`Report: ${join(outDir, 'stream-report.json')}`);

@@ -10,6 +10,7 @@ const SOURCES = [
   'https://iptv-org.github.io/iptv/countries/au.m3u',    // ensure every AU channel is included
 ];
 
+const STATUS_URL = 'status.json';      // daily stream check (see tools/check-streams.mjs)
 const CACHE_KEY = 'telly.channels.v2'; // v2: religious channels excluded
 const PREFS_KEY = 'telly.prefs.v1';
 const FAVS_KEY  = 'telly.favs.v1';
@@ -44,13 +45,25 @@ const KEYWORD_CATS = [
   [/\b(drama|series|novela)\b/i, 'Series'],
 ];
 
-// On HTTPS, browsers block plain-http media (mixed content). Those streams
-// are routed through the same-origin /api/proxy relay (Vercel function),
-// which fetches them server-side and rewrites manifests to stay proxied.
-// On plain-http hosting (localhost/XAMPP) streams always play direct.
+/* Stream routing.
+ *
+ * Two things stop a stream playing in a browser that VLC handles fine:
+ *   - mixed content: an https page may not load http:// media
+ *   - no CORS header: the browser refuses the response
+ * Both are solved by /api/proxy, which fetches server-side and returns the
+ * stream same-origin. It only exists on the deployed (https) origin, so on
+ * localhost/XAMPP everything plays direct — there's no mixed-content problem
+ * there anyway.
+ *
+ * Proxying costs bandwidth, so it's used only where needed: http streams,
+ * streams status.json knows lack CORS, and as a retry after a network error.
+ */
+const canProxy = () => location.protocol === 'https:';
+const proxyUrl = (url) => '/api/proxy?url=' + encodeURIComponent(url);
+
 const streamSrc = (url) =>
-  (location.protocol === 'https:' && url.startsWith('http:'))
-    ? '/api/proxy?url=' + encodeURIComponent(url)
+  canProxy() && (url.startsWith('http:') || state.noCors.has(url))
+    ? proxyUrl(url)
     : url;
 
 const $ = (s) => document.querySelector(s);
@@ -89,6 +102,10 @@ const state = {
   mv: [],              // multiview channel urls (persisted)
   mvAudio: null,       // url whose tile has sound
   picking: false,      // "tap channels to add to multiview" mode
+  dead: new Set(),     // urls the daily check found broken everywhere
+  noCors: new Set(),   // urls that are alive but need the proxy
+  showDead: false,     // reveal the hidden broken channels
+  statusAt: null,      // when status.json was generated
 };
 
 const CHUNK = 60;
@@ -241,6 +258,23 @@ async function fetchChannels(force = false) {
   return { channels, fromCache: false };
 }
 
+/* ---------------- stream status ---------------- */
+
+// status.json is refreshed daily by .github/workflows/check-streams.yml.
+// It's an enhancement, not a dependency: if it's missing or stale the app
+// just shows every channel, exactly as it did before.
+async function fetchStatus() {
+  try {
+    const r = await fetch(STATUS_URL, { cache: 'no-cache' });
+    if (!r.ok) return;
+    const s = await r.json();
+    if (!Array.isArray(s.dead)) return;
+    state.dead = new Set(s.dead);
+    state.noCors = new Set(s.noCors || []);
+    state.statusAt = s.generated || null;
+  } catch { /* no status data — nothing gets hidden */ }
+}
+
 /* ---------------- derived UI data ---------------- */
 
 function buildFacets() {
@@ -287,15 +321,40 @@ function applyFilters() {
   else if (state.cat !== 'All') list = list.filter((ch) => ch.cats.includes(state.cat));
   if (state.country !== 'all') list = list.filter((ch) => ch.country === state.country);
   if (state.q) list = list.filter((ch) => ch.nameL.includes(state.q));
+
+  // channels the daily check found broken are hidden unless asked for.
+  // Favorites are never hidden — the user chose those deliberately.
+  let hidden = 0;
+  if (!state.showDead && state.dead.size && state.cat !== 'Favorites') {
+    const kept = list.filter((ch) => !state.dead.has(ch.url) || state.favs.has(ch.url));
+    hidden = list.length - kept.length;
+    list = kept;
+  }
   state.filtered = list;
 
   state.rendered = 0;
   el.grid.innerHTML = '';
   el.empty.classList.toggle('hidden', list.length > 0);
-  el.count.textContent = list.length === state.channels.length
-    ? `${fmt(list.length)} channels · ${state.cats.length} categories · ${state.countries.length} countries`
-    : `${fmt(list.length)} of ${fmt(state.channels.length)} channels`;
+  renderCount(hidden);
   renderChunk();
+}
+
+function renderCount(hidden) {
+  const n = state.filtered.length;
+  const base = n === state.channels.length
+    ? `${fmt(n)} channels · ${state.cats.length} categories · ${state.countries.length} countries`
+    : `${fmt(n)} of ${fmt(state.channels.length)} channels`;
+  const note = hidden
+    ? ` · ${fmt(hidden)} offline <button class="linkbtn" id="showDead">show</button>`
+    : (state.showDead && state.dead.size
+        ? ` · showing offline <button class="linkbtn" id="hideDead">hide</button>`
+        : '');
+  el.count.innerHTML = esc(base) + note;
+  const toggle = $('#showDead') || $('#hideDead');
+  if (toggle) toggle.addEventListener('click', () => {
+    state.showDead = !state.showDead;
+    applyFilters();
+  });
 }
 
 function subline(ch) {
@@ -411,6 +470,7 @@ function initPinch() {
 let hls = null;
 let netRetried = false;
 let mediaRetried = false;
+let proxyTried = false;
 
 function openPlayer(ch) {
   state.current = ch;
@@ -427,12 +487,14 @@ function openPlayer(ch) {
   startStream(ch);
 }
 
-function startStream(ch) {
+function startStream(ch, { proxy = false } = {}) {
   stopStream();
   netRetried = mediaRetried = false;
+  proxyTried = proxy;
   el.perror.classList.add('hidden');
   el.spinner.classList.remove('hidden');
   const video = el.video;
+  const src = proxy ? proxyUrl(ch.url) : streamSrc(ch.url);
 
   if (window.Hls && Hls.isSupported()) {
     hls = new Hls({
@@ -441,13 +503,20 @@ function startStream(ch) {
       levelLoadingTimeOut: 12000,
       fragLoadingTimeOut: 20000,
     });
-    hls.loadSource(streamSrc(ch.url));
+    hls.loadSource(src);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !netRetried) {
-        netRetried = true; hls.startLoad(); return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // A network error here is usually CORS, which looks identical to an
+        // outage from JS. Retry once through the relay before giving up —
+        // that rescues every alive-but-CORS-blocked stream.
+        if (!proxyTried && canProxy() && src !== proxyUrl(ch.url)) {
+          startStream(ch, { proxy: true });
+          return;
+        }
+        if (!netRetried) { netRetried = true; hls.startLoad(); return; }
       }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !mediaRetried) {
         mediaRetried = true; hls.recoverMediaError(); return;
@@ -455,9 +524,15 @@ function startStream(ch) {
       showStreamError();
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = streamSrc(ch.url);
+    video.src = src;
     video.play().catch(() => {});
-    video.onerror = showStreamError;
+    video.onerror = () => {
+      if (!proxyTried && canProxy() && src !== proxyUrl(ch.url)) {
+        startStream(ch, { proxy: true });
+        return;
+      }
+      showStreamError();
+    };
   } else {
     showStreamError();
   }
@@ -587,7 +662,7 @@ function mvTileHTML(ch) {
   </div>`;
 }
 
-function mvStartTile(ch) {
+function mvStartTile(ch, { proxy = false } = {}) {
   const tile = el.mvGrid.querySelector(`[data-url="${CSS.escape(ch.url)}"]`);
   if (!tile) return;
   mvStopTile(ch.url);
@@ -596,7 +671,18 @@ function mvStartTile(ch) {
   const err = tile.querySelector('.mv-err');
   load.classList.remove('hidden');
   err.classList.add('hidden');
-  const fail = () => { load.classList.add('hidden'); err.classList.remove('hidden'); };
+  const src = proxy ? proxyUrl(ch.url) : streamSrc(ch.url);
+  // same CORS fallback as the main player
+  const viaProxy = () => {
+    if (proxy || !canProxy() || src === proxyUrl(ch.url)) return false;
+    mvStartTile(ch, { proxy: true });
+    return true;
+  };
+  const fail = () => {
+    if (viaProxy()) return;
+    load.classList.add('hidden');
+    err.classList.remove('hidden');
+  };
   video.addEventListener('playing', () => load.classList.add('hidden'));
 
   if (window.Hls && Hls.isSupported()) {
@@ -610,18 +696,21 @@ function mvStartTile(ch) {
       fragLoadingTimeOut: 20000,
     });
     let retried = false;
-    h.loadSource(streamSrc(ch.url));
+    h.loadSource(src);
     h.attachMedia(video);
     h.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
     h.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !retried) { retried = true; h.startLoad(); return; }
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        if (viaProxy()) return;
+        if (!retried) { retried = true; h.startLoad(); return; }
+      }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !retried) { retried = true; h.recoverMediaError(); return; }
       fail();
     });
     mvPlayers.set(ch.url, h);
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = streamSrc(ch.url);
+    video.src = src;
     video.onerror = fail;
     video.play().catch(() => {});
     mvPlayers.set(ch.url, null);
@@ -1010,7 +1099,11 @@ async function boot(force = false) {
   el.refresh.classList.add('spinning');
   renderSkeletons();
   try {
-    const { channels, fromCache } = await fetchChannels(force);
+    // status is a nice-to-have; never let it block or fail the channel list
+    const [{ channels, fromCache }] = await Promise.all([
+      fetchChannels(force),
+      fetchStatus(),
+    ]);
     state.channels = channels;
     buildFacets();
     // drop favorites that no longer exist in the channel list

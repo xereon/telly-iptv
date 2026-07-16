@@ -1,0 +1,37 @@
+# Refreshes status.json so the app can hide dead channels.
+# Runs here rather than as a Vercel cron: the full check takes ~2 minutes,
+# well over the Hobby function limit, and this way it costs no Vercel
+# bandwidth. Committing the result to main triggers the normal auto-deploy.
+name: Refresh stream status
+
+on:
+  schedule:
+    - cron: '17 4 * * *'   # daily, 04:17 UTC
+  workflow_dispatch:        # and on demand from the Actions tab
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check every stream
+        run: node tools/check-streams.mjs
+
+      - name: Commit status.json if it changed
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add status.json
+          if git diff --staged --quiet; then
+            echo "no change"
+          else
+            git commit -m 'chore: refresh stream status'
+            git push
+          fi

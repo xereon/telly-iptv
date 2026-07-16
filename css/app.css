@@ -291,6 +291,17 @@ a:hover { text-decoration: underline; }
   color: var(--muted);
   letter-spacing: .2px;
 }
+.linkbtn {
+  border: 0;
+  background: none;
+  padding: 0 0 0 4px;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--accent-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkbtn:hover { color: #fff; }
 
 .grid { touch-action: pan-y; }
 
