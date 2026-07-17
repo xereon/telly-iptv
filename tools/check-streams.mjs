@@ -41,7 +41,9 @@ const argVal = (name, dflt) => {
 const LIMIT = argVal('--limit', Infinity);
 const CONCURRENCY = argVal('--concurrency', 80);
 
-const RELIGIOUS_RE = /\b(church|gospel|catholic|islam|hope|faith|god|christian|worship|bible)\b/i;
+// kept in step with the app's filter in js/app.js
+const RELIGIOUS_RE = /\b(church|gospel|catholic|islam|hope|faith|god|christian|worship|bible|heaven)\b/i;
+const RELIGIOUS_NAME_RE = /\bheaven\b/i;
 
 /* ---- parse (mirrors the app's parser) ---- */
 
@@ -61,7 +63,7 @@ function parseM3U(text) {
     const group = attr('group-title');
     const cats = group.split(';').map((c) => c.trim()).filter((c) => c && c !== 'Undefined');
     // same exclusion the app applies
-    if (cats.includes('Religious')) { meta = null; continue; }
+    if (cats.includes('Religious') || RELIGIOUS_NAME_RE.test(name)) { meta = null; continue; }
     if (!cats.length && RELIGIOUS_RE.test(name)) { meta = null; continue; }
     out.push({ name: name || tvgId || 'Unknown', tvgId, url: line });
     meta = null;

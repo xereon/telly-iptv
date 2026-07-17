@@ -41,6 +41,7 @@ const KEYWORD_CATS = [
   [/\b(kid|cartoon|junior|toon|baby)\b/i, 'Kids'],
   // 'Religious' is filtered out in normalize() — this rule catches uncategorized ones so they're excluded too
   [/\b(church|gospel|catholic|islam|hope|faith|god|christian|worship|bible)\b/i, 'Religious'],
+  [/\bheaven\b/i, 'Religious'],
   [/\b(comedy|laugh)\b/i, 'Comedy'],
   [/\b(nature|wild|history|discover|documentar)\b/i, 'Documentary'],
   [/\b(weather)\b/i, 'Weather'],
@@ -214,11 +215,23 @@ function parseM3U(text) {
   return out;
 }
 
+/* Religious channels the playlist files under something else.
+ *
+ * The keyword rules above only run when the playlist gives a channel no
+ * category at all, so they never reach these — every "heaven" channel is
+ * tagged Series or Religious already. Blocking on the name as well is what
+ * makes the word actually take effect. Kept deliberately narrow: this
+ * overrides the playlist's own categories, so a loose word here would take
+ * unrelated channels with it.
+ */
+const RELIGIOUS_NAME_RE = /\bheaven\b/i;
+
 function normalize(lists) {
   const byUrl = new Map();
   for (const list of lists) {
     for (const ch of list) {
-      if (ch.cats.includes('Religious')) continue; // religious channels excluded
+      // excluded by the playlist's category, or by name where that's wrong
+      if (ch.cats.includes('Religious') || RELIGIOUS_NAME_RE.test(ch.name)) continue;
       if (!byUrl.has(ch.url)) byUrl.set(ch.url, ch);
     }
   }
