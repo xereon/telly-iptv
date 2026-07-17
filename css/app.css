@@ -696,6 +696,10 @@ a:hover { text-decoration: underline; }
   transition: transform .18s ease;
 }
 .mv-fab:active { transform: scale(.92); }
+/* The OS picture-in-picture window is not ours to position — Chrome parks it
+   bottom-right, right on top of this button. Move to the other corner while
+   it's up; the in-app dock that normally lives there is hidden in that case. */
+body.pip-native .mv-fab { left: 16px; right: auto; }
 .mv-badge {
   position: absolute;
   top: -4px;

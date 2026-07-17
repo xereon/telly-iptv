@@ -923,18 +923,24 @@ async function mvStartPicking() {
     keepVideo.muted = false;
     keepVideo.play().catch(() => {});
     keepVideo.addEventListener('leavepictureinpicture', () => {
-      // user closed the OS PiP window mid-pick — fall back to the in-app dock
-      if (pip && state.picking) el.pipDock.classList.remove('offscreen');
+      // user closed the OS PiP window mid-pick — fall back to the in-app dock,
+      // which reclaims the corner the fab was moved into
+      if (pip && state.picking) {
+        el.pipDock.classList.remove('offscreen');
+        document.body.classList.remove('pip-native');
+      }
     });
     // prefer the OS-level PiP window; the in-app dock is the fallback
     try {
       if (document.pictureInPictureEnabled && keepVideo.readyState >= 1) {
         await keepVideo.requestPictureInPicture();
         el.pipDock.classList.add('offscreen');
+        document.body.classList.add('pip-native');
       } else if (keepVideo.webkitSetPresentationMode &&
                  keepVideo.webkitPresentationMode === 'inline') {
         keepVideo.webkitSetPresentationMode('picture-in-picture');
         el.pipDock.classList.add('offscreen');
+        document.body.classList.add('pip-native');
       }
     } catch { /* PiP refused (unsupported / not ready) — dock stays visible */ }
   }
@@ -962,6 +968,7 @@ function pipStop() {
   video.remove();
   el.pipDock.classList.add('hidden');
   el.pipDock.classList.remove('offscreen');
+  document.body.classList.remove('pip-native');
 }
 
 /* ---------------- favorites + prefs ---------------- */
