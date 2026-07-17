@@ -11,7 +11,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=10">
+<link rel="stylesheet" href="css/app.css?v=12">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 </head>
 <body>
@@ -136,7 +136,8 @@
     <button class="icon-btn" id="mvClose" aria-label="Close multiview">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
-    <div class="mv-title">Multiview <span class="mv-info" id="mvInfo"></span></div>
+    <div class="mv-title"><span class="mv-title-text">Multiview</span><span class="mv-info" id="mvInfo"></span></div>
+    <button class="btn ghost mv-small-btn" id="mvMode" title="Solo: one channel at a time. Mix: hear several at once.">🔊 Solo</button>
     <button class="btn ghost mv-small-btn" id="mvAddMore">＋ Add</button>
     <button class="btn ghost mv-small-btn" id="mvClear">Clear</button>
   </div>
@@ -147,7 +148,7 @@
     <p>Add channels and watch them side by side —<br>tap a tile to hear that channel.</p>
     <button class="btn" id="mvPickBtn">Browse &amp; add channels</button>
   </div>
-  <p class="mv-hint">Tap a tile for sound · ⛶ opens full player · keys 1–9 switch audio on the first 9</p>
+  <p class="mv-hint">Tap a tile for sound · unmute a second one to hear both · ⛶ full player · keys 1–9</p>
 </div>
 
 <!-- Floating mini-player: keeps the audible multiview channel playing while picking -->
@@ -158,6 +159,6 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="js/app.js?v=10"></script>
+<script src="js/app.js?v=12"></script>
 </body>
 </html>

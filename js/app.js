@@ -18,6 +18,7 @@ const CACHE_KEY = 'telly.channels.v2'; // v2: religious channels excluded
 const PREFS_KEY = 'telly.prefs.v1';
 const FAVS_KEY  = 'telly.favs.v1';
 const MV_KEY    = 'telly.multiview.v1';
+const MVA_KEY   = 'telly.mvaudio.v1';  // mode + per-channel volume/mute
 const MV_MAX    = 15;
 const CACHE_TTL = 12 * 60 * 60 * 1000; // 12h
 
@@ -90,7 +91,7 @@ const el = {
   toast: $('#toast'), refresh: $('#refreshBtn'),
   mv: $('#mv'), mvGrid: $('#mvGrid'), mvFab: $('#mvFab'), mvBadge: $('#mvBadge'),
   mvInfo: $('#mvInfo'), mvEmpty: $('#mvEmpty'), playerMV: $('#playerMV'),
-  pipDock: $('#pipDock'), pipName: $('#pipName'),
+  mvMode: $('#mvMode'), pipDock: $('#pipDock'), pipName: $('#pipName'),
 };
 
 const state = {
@@ -108,7 +109,12 @@ const state = {
   current: null,       // channel playing now
   byUrl: new Map(),    // url -> channel
   mv: [],              // multiview channel urls (persisted)
-  mvAudio: null,       // url whose tile has sound
+  mvNames: {},         // url -> channel name, so a saved wall survives the
+                       // playlist re-pointing that channel at a new url
+  mvAudio: null,       // solo mode: the one url with sound
+  audioMode: 'solo',   // 'solo' = one channel at a time | 'mix' = hear several
+  vol: {},             // url -> 0..1
+  muted: new Set(),    // mix mode: urls explicitly silenced
   picking: false,      // "tap channels to add to multiview" mode
   dead: new Set(),     // urls the daily check found broken everywhere
   noCors: new Set(),   // urls that are alive but need the proxy
@@ -592,7 +598,51 @@ function renderRelated(ch) {
 const mvPlayers = new Map(); // url -> hls instance (or null for native HLS)
 let pip = null;              // { url, hls, video } — audible channel kept alive while picking
 
-function mvSave() { localStorage.setItem(MV_KEY, JSON.stringify(state.mv)); }
+// Saved with the channel name alongside the url: iptv-org re-points channels
+// at new stream urls regularly, and the url alone would strand the entry.
+function mvSave() {
+  localStorage.setItem(MV_KEY, JSON.stringify(state.mv.map((u) => ({
+    u, n: state.byUrl.get(u)?.name || state.mvNames[u] || '',
+  }))));
+}
+
+/* Re-point the saved wall at the current playlist.
+ *
+ * iptv-org rotates stream urls, so a saved url regularly stops existing even
+ * though the channel is still there. Dropping those entries silently emptied
+ * the wall a day or two after it was set up, so look the channel back up by
+ * name and follow it to its new url; only a channel that has genuinely left
+ * the playlist is removed.
+ */
+function mvReconcile(channels, urls) {
+  if (!state.mv.length) return;
+  const byName = new Map(channels.map((c) => [c.name.toLowerCase(), c]));
+  const kept = [];
+  let moved = 0, lost = 0;
+
+  for (const u of state.mv) {
+    if (urls.has(u)) { kept.push(u); continue; }
+    const repl = byName.get((state.mvNames[u] || '').toLowerCase());
+    if (!repl) { lost++; delete state.mvNames[u]; continue; }
+    // carry this channel's settings across to its new url
+    kept.push(repl.url);
+    state.mvNames[repl.url] = repl.name;
+    delete state.mvNames[u];
+    if (u in state.vol) { state.vol[repl.url] = state.vol[u]; delete state.vol[u]; }
+    if (state.muted.has(u)) { state.muted.delete(u); state.muted.add(repl.url); }
+    if (state.mvAudio === u) state.mvAudio = repl.url;
+    moved++;
+  }
+
+  state.mv = kept;
+  if (!state.mv.includes(state.mvAudio)) state.mvAudio = state.mv[0] || null;
+  // walls saved before names were stored: learn them now, while the urls still
+  // resolve, so the next rotation can be followed instead of losing the channel
+  const needNames = state.mv.filter((u) => !state.mvNames[u] && state.byUrl.has(u));
+  for (const u of needNames) state.mvNames[u] = state.byUrl.get(u).name;
+  if (moved || lost || needNames.length) { mvSave(); mvSaveAudio(); }
+  if (lost) toast(`${lost} multiview channel${lost > 1 ? 's are' : ' is'} no longer in the playlist`);
+}
 
 function mvUpdateFab() {
   el.mvBadge.textContent = state.mv.length;
@@ -603,6 +653,7 @@ function mvAdd(ch, { silent = false } = {}) {
   if (state.mv.includes(ch.url)) { if (!silent) toast(`${ch.name} is already in multiview`); return false; }
   if (state.mv.length >= MV_MAX) { toast(`Multiview is full (max ${MV_MAX} channels)`); return false; }
   state.mv.push(ch.url);
+  state.mvNames[ch.url] = ch.name;
   if (!state.mvAudio) state.mvAudio = ch.url;
   mvSave();
   mvUpdateFab();
@@ -612,6 +663,7 @@ function mvAdd(ch, { silent = false } = {}) {
 
 function mvRemove(url) {
   state.mv = state.mv.filter((u) => u !== url);
+  delete state.mvNames[url];
   if (state.mvAudio === url) state.mvAudio = state.mv[0] || null;
   mvSave();
   mvUpdateFab();
@@ -666,7 +718,10 @@ function mvTileHTML(ch) {
         <button data-act="remove" title="Remove from multiview">✕</button>
       </span>
     </div>
-    <span class="mv-audio-ind">🔇</span>
+    <div class="mv-vol">
+      <button class="mv-mute" data-act="mute" aria-label="Mute or unmute">🔇</button>
+      <input class="mv-vol-slider" data-act="vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+    </div>
   </div>`;
 }
 
@@ -733,18 +788,96 @@ function mvStopTile(url) {
   mvPlayers.delete(url);
 }
 
+/* Audio modes.
+ *
+ * solo (default): exactly one tile has sound — tapping a tile moves it there.
+ * mix:            every tile has its own mute + volume, so several play at once.
+ *
+ * Touching the volume or mute of a silent tile only makes sense if you want to
+ * hear it alongside what's already playing, so that flips to mix on its own
+ * rather than doing nothing; the header button switches back.
+ */
+const mvVol = (url) => state.vol[url] ?? 1;
+
+function mvIsMuted(url) {
+  return state.audioMode === 'solo' ? url !== state.mvAudio : state.muted.has(url);
+}
+
+function mvSaveAudio() {
+  localStorage.setItem(MVA_KEY, JSON.stringify({
+    mode: state.audioMode, vol: state.vol, muted: [...state.muted], audio: state.mvAudio,
+  }));
+}
+
+function mvSetMode(mode) {
+  if (mode === state.audioMode) return;
+  if (mode === 'mix') {
+    // carry solo over: only what was already audible stays audible
+    state.muted = new Set(state.mv.filter((u) => u !== state.mvAudio));
+  } else {
+    // back to solo — keep listening to whatever is currently unmuted
+    const audible = state.mv.filter((u) => !state.muted.has(u));
+    if (audible.length && !audible.includes(state.mvAudio)) state.mvAudio = audible[0];
+  }
+  state.audioMode = mode;
+  mvSaveAudio();
+  mvApplyAudio();
+}
+
+function mvSetVolume(url, v) {
+  state.vol[url] = v;
+  if (v > 0) {
+    if (state.audioMode === 'solo' && url !== state.mvAudio) mvSetMode('mix');
+    state.muted.delete(url);
+  }
+  mvSaveAudio();
+  mvApplyAudio();
+}
+
+function mvToggleMute(url) {
+  if (mvIsMuted(url)) {
+    // unmuting a silent tile means "this one as well as what's already on",
+    // so it mixes rather than stealing the sound (tapping the tile does that)
+    if (state.audioMode === 'solo' && state.mvAudio && url !== state.mvAudio) mvSetMode('mix');
+    state.muted.delete(url);
+    if (mvVol(url) === 0) state.vol[url] = 1;                 // don't unmute to silence
+    if (state.audioMode === 'solo') state.mvAudio = url;
+  } else if (state.audioMode === 'solo') {
+    mvSetMode('mix');            // silencing the only audible tile means mixing
+    state.muted.add(url);
+  } else {
+    state.muted.add(url);
+  }
+  mvSaveAudio();
+  mvApplyAudio();
+}
+
 function mvApplyAudio() {
   if (state.mvAudio && !state.mv.includes(state.mvAudio)) state.mvAudio = state.mv[0] || null;
   for (const tile of el.mvGrid.querySelectorAll('.mv-tile')) {
-    const isAudio = tile.dataset.url === state.mvAudio;
-    tile.classList.toggle('audio', isAudio);
-    tile.querySelector('video').muted = !isAudio;
-    tile.querySelector('.mv-audio-ind').textContent = isAudio ? '🔊' : '🔇';
+    const url = tile.dataset.url;
+    const muted = mvIsMuted(url);
+    const video = tile.querySelector('video');
+    video.muted = muted;
+    video.volume = mvVol(url);
+    tile.classList.toggle('audio', !muted);
+    tile.querySelector('.mv-mute').textContent = muted ? '🔇' : '🔊';
+    const slider = tile.querySelector('.mv-vol-slider');
+    if (slider && document.activeElement !== slider) slider.value = mvVol(url);
   }
-  const ch = state.byUrl.get(state.mvAudio);
-  el.mvInfo.textContent = state.mv.length
-    ? `${state.mv.length} channel${state.mv.length > 1 ? 's' : ''}${ch ? ` · 🔊 ${ch.name}` : ''}`
-    : '';
+
+  const n = state.mv.length;
+  if (!n) { el.mvInfo.textContent = ''; }
+  else if (state.audioMode === 'mix') {
+    const playing = state.mv.filter((u) => !mvIsMuted(u)).length;
+    el.mvInfo.textContent = `${n} channel${n > 1 ? 's' : ''} · 🔊 ${playing} playing`;
+  } else {
+    const ch = state.byUrl.get(state.mvAudio);
+    el.mvInfo.textContent = `${n} channel${n > 1 ? 's' : ''}${ch ? ` · 🔊 ${ch.name}` : ''}`;
+  }
+  el.mvMode.textContent = state.audioMode === 'mix' ? '🎚️ Mix' : '🔊 Solo';
+  el.mvMode.classList.toggle('on', state.audioMode === 'mix');
+  mvSaveAudio(); // every path that changes what's audible ends up here
 }
 
 function openMV() {
@@ -859,9 +992,25 @@ function loadPrefs() {
   catch { state.favs = new Set(); }
   try {
     const mv = JSON.parse(localStorage.getItem(MV_KEY));
-    if (Array.isArray(mv)) state.mv = mv.slice(0, MV_MAX).filter((u) => typeof u === 'string');
-    state.mvAudio = state.mv[0] || null;
+    if (Array.isArray(mv)) {
+      // v1 stored bare url strings; v2 stores { u, n }
+      const items = mv
+        .map((x) => (typeof x === 'string' ? { u: x, n: '' } : x))
+        .filter((x) => x && typeof x.u === 'string')
+        .slice(0, MV_MAX);
+      state.mv = items.map((x) => x.u);
+      state.mvNames = Object.fromEntries(items.map((x) => [x.u, x.n || '']));
+    }
   } catch { state.mv = []; }
+  try {
+    const a = JSON.parse(localStorage.getItem(MVA_KEY)) || {};
+    if (a.mode === 'mix' || a.mode === 'solo') state.audioMode = a.mode;
+    if (a.vol && typeof a.vol === 'object') state.vol = a.vol;
+    if (Array.isArray(a.muted)) state.muted = new Set(a.muted);
+    if (typeof a.audio === 'string') state.mvAudio = a.audio;
+  } catch { /* defaults: solo, full volume */ }
+  // whatever had the sound last time, if it's still on the wall
+  if (!state.mvAudio || !state.mv.includes(state.mvAudio)) state.mvAudio = state.mv[0] || null;
 }
 
 /* ---------------- events ---------------- */
@@ -1034,8 +1183,11 @@ function wireEvents() {
   $('#mvPickBtn').addEventListener('click', mvStartPicking);
   $('#mvClear').addEventListener('click', () => {
     state.mv = [];
+    state.mvNames = {};
     state.mvAudio = null;
+    state.muted.clear();
     mvSave();
+    mvSaveAudio();
     closeMV();
     mvUpdateFab();
     toast('Multiview cleared');
@@ -1057,9 +1209,20 @@ function wireEvents() {
       if (ch) { mvStartTile(ch); mvApplyAudio(); }
       return;
     }
-    state.mvAudio = url;   // tap a tile → that channel gets the sound
+    if (act === 'mute') { mvToggleMute(url); return; }
+    if (act === 'vol' || e.target.closest('.mv-vol')) return; // slider — not a tile tap
+    // solo: move the sound here. mix: this tile has its own switch.
+    if (state.audioMode === 'mix') { mvToggleMute(url); return; }
+    state.mvAudio = url;
     mvApplyAudio();
   });
+  el.mvGrid.addEventListener('input', (e) => {
+    const slider = e.target.closest('[data-act="vol"]');
+    if (!slider) return;
+    mvSetVolume(slider.closest('.mv-tile').dataset.url, parseFloat(slider.value));
+  });
+  el.mvMode.addEventListener('click', () =>
+    mvSetMode(state.audioMode === 'mix' ? 'solo' : 'mix'));
   addEventListener('resize', () => {
     if (!el.mv.classList.contains('hidden')) mvLayout();
   });
@@ -1076,7 +1239,9 @@ function wireEvents() {
     }
     if (!el.mv.classList.contains('hidden') && e.key >= '1' && e.key <= '9') {
       const url = state.mv[+e.key - 1];
-      if (url) { state.mvAudio = url; mvApplyAudio(); }
+      // solo: jump the sound there. mix: toggle that tile, same as tapping it.
+      if (url && state.audioMode === 'mix') mvToggleMute(url);
+      else if (url) { state.mvAudio = url; mvApplyAudio(); }
       return;
     }
     if (e.key === '/' && document.activeElement !== el.search) {
@@ -1119,11 +1284,8 @@ async function boot(force = false) {
     const nFavs = state.favs.size;
     state.favs = new Set([...state.favs].filter((u) => urls.has(u)));
     if (state.favs.size !== nFavs) localStorage.setItem(FAVS_KEY, JSON.stringify([...state.favs]));
-    // multiview: url lookup + prune entries gone from the playlist
     state.byUrl = new Map(channels.map((c) => [c.url, c]));
-    const nMV = state.mv.length;
-    state.mv = state.mv.filter((u) => urls.has(u));
-    if (state.mv.length !== nMV) { state.mvAudio = state.mv[0] || null; mvSave(); }
+    mvReconcile(channels, urls);
     mvUpdateFab();
     // saved category may no longer exist
     if (state.cat !== 'All' && state.cat !== 'Favorites' && !state.cats.some((c) => c.name === state.cat)) {
