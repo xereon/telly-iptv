@@ -32,6 +32,7 @@ const SOURCES = [
 const TIMEOUT_MS = 12000;
 const BODY_LIMIT = 64 * 1024;
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+const ORIGIN = 'https://xereon.github.io';  // sent so CORS checks reflect a real browser
 
 const args = process.argv.slice(2);
 const argVal = (name, dflt) => {
@@ -104,7 +105,10 @@ async function checkOne(entry) {
     const res = await fetch(entry.url, {
       signal: ctrl.signal,
       redirect: 'follow',
-      headers: { 'User-Agent': UA, Accept: '*/*' },
+      // Origin matters: most CDNs only send access-control-allow-origin when
+      // the request carries one. Without it they look CORS-less when they
+      // aren't, and the app then relays streams that would play direct.
+      headers: { 'User-Agent': UA, Accept: '*/*', Origin: ORIGIN },
     });
     const ms = Date.now() - started;
     const cors = res.headers.get('access-control-allow-origin');

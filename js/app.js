@@ -71,10 +71,27 @@ const PROXY_ORIGIN = location.hostname.endsWith('github.io')
 const canProxy = () => location.protocol === 'https:';
 const proxyUrl = (url) => PROXY_ORIGIN + '/api/proxy?url=' + encodeURIComponent(url);
 
+// an https page cannot load http media at all, so those have no direct route
+const canDirect = (url) => location.protocol !== 'https:' || !url.startsWith('http:');
+
 const streamSrc = (url) =>
   canProxy() && (url.startsWith('http:') || state.noCors.has(url))
     ? proxyUrl(url)
     : url;
+
+/* Pick the next thing to try after a failure.
+ *
+ * Failures are ambiguous from JS — CORS, an outage and a dead relay all look
+ * the same — so rather than guess, try the other route once. This works in
+ * both directions on purpose: if the relay is down or over quota, streams
+ * that can play direct still do, instead of the whole app going dark.
+ */
+function nextSrc(url, current) {
+  const proxied = proxyUrl(url);
+  if (current !== proxied && canProxy()) return proxied;      // direct failed → relay
+  if (current === proxied && canDirect(url)) return url;      // relay failed → direct
+  return null;
+}
 
 const $ = (s) => document.querySelector(s);
 
@@ -497,7 +514,6 @@ function initPinch() {
 let hls = null;
 let netRetried = false;
 let mediaRetried = false;
-let proxyTried = false;
 
 function openPlayer(ch) {
   state.current = ch;
@@ -514,14 +530,22 @@ function openPlayer(ch) {
   startStream(ch);
 }
 
-function startStream(ch, { proxy = false } = {}) {
+function startStream(ch, { src: forced } = {}) {
   stopStream();
   netRetried = mediaRetried = false;
-  proxyTried = proxy;
   el.perror.classList.add('hidden');
   el.spinner.classList.remove('hidden');
   const video = el.video;
-  const src = proxy ? proxyUrl(ch.url) : streamSrc(ch.url);
+  const src = forced || streamSrc(ch.url);
+  // only swap routes once, so a stream that is simply offline can't loop
+  const switched = !!forced;
+  const tryOtherRoute = () => {
+    if (switched) return false;
+    const alt = nextSrc(ch.url, src);
+    if (!alt) return false;
+    startStream(ch, { src: alt });
+    return true;
+  };
 
   if (window.Hls && Hls.isSupported()) {
     hls = new Hls({
@@ -536,13 +560,7 @@ function startStream(ch, { proxy = false } = {}) {
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        // A network error here is usually CORS, which looks identical to an
-        // outage from JS. Retry once through the relay before giving up —
-        // that rescues every alive-but-CORS-blocked stream.
-        if (!proxyTried && canProxy() && src !== proxyUrl(ch.url)) {
-          startStream(ch, { proxy: true });
-          return;
-        }
+        if (tryOtherRoute()) return;
         if (!netRetried) { netRetried = true; hls.startLoad(); return; }
       }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !mediaRetried) {
@@ -553,13 +571,7 @@ function startStream(ch, { proxy = false } = {}) {
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = src;
     video.play().catch(() => {});
-    video.onerror = () => {
-      if (!proxyTried && canProxy() && src !== proxyUrl(ch.url)) {
-        startStream(ch, { proxy: true });
-        return;
-      }
-      showStreamError();
-    };
+    video.onerror = () => { if (!tryOtherRoute()) showStreamError(); };
   } else {
     showStreamError();
   }
@@ -738,7 +750,7 @@ function mvTileHTML(ch) {
   </div>`;
 }
 
-function mvStartTile(ch, { proxy = false } = {}) {
+function mvStartTile(ch, { src: forced } = {}) {
   const tile = el.mvGrid.querySelector(`[data-url="${CSS.escape(ch.url)}"]`);
   if (!tile) return;
   mvStopTile(ch.url);
@@ -747,15 +759,19 @@ function mvStartTile(ch, { proxy = false } = {}) {
   const err = tile.querySelector('.mv-err');
   load.classList.remove('hidden');
   err.classList.add('hidden');
-  const src = proxy ? proxyUrl(ch.url) : streamSrc(ch.url);
-  // same CORS fallback as the main player
-  const viaProxy = () => {
-    if (proxy || !canProxy() || src === proxyUrl(ch.url)) return false;
-    mvStartTile(ch, { proxy: true });
+  const src = forced || streamSrc(ch.url);
+  const switched = !!forced;
+  // same both-ways route switching as the main player
+  const tryOtherRoute = () => {
+    if (switched) return false;
+    const alt = nextSrc(ch.url, src);
+    if (!alt) return false;
+    mvStartTile(ch, { src: alt });
+    mvApplyAudio();      // the new tile's video element needs its volume back
     return true;
   };
   const fail = () => {
-    if (viaProxy()) return;
+    if (tryOtherRoute()) return;
     load.classList.add('hidden');
     err.classList.remove('hidden');
   };
@@ -778,7 +794,7 @@ function mvStartTile(ch, { proxy = false } = {}) {
     h.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        if (viaProxy()) return;
+        if (tryOtherRoute()) return;
         if (!retried) { retried = true; h.startLoad(); return; }
       }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !retried) { retried = true; h.recoverMediaError(); return; }
