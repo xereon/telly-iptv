@@ -1286,13 +1286,44 @@ function wireEvents() {
     }
   });
 
-  // collapse toolbar when scrolling down (more room for channels on mobile)
-  let lastY = 0;
-  addEventListener('scroll', () => {
-    const y = scrollY;
-    if (y > 220 && y > lastY + 6) el.header.classList.add('compact');
-    else if (y < lastY - 6 || y < 120) el.header.classList.remove('compact');
+  // Collapse the toolbar when scrolling down for more room on mobile.
+  //
+  // The toolbar lives inside the sticky header and collapses with a 0.25s
+  // max-height transition, so toggling it shrinks/grows the document height
+  // gradually — which nudges scrollY and fires a burst of scroll events. The
+  // naive handler re-evaluated on each of those against a stale baseline and
+  // flipped the class back and forth (the show/hide glitch). So: throttle to
+  // one check per frame, require a real direction change past a dead zone, and
+  // lock the state for 300ms after a toggle to absorb the reflow it causes.
+  let lastY = scrollY;
+  let acc = 0;              // scroll distance in the current direction
+  let ticking = false;
+  let locked = false;
+
+  const setCompact = (on) => {
+    if (el.header.classList.contains('compact') === on) return;
+    el.header.classList.toggle('compact', on);
+    locked = true;          // ignore the reflow-driven scroll burst that follows
+    setTimeout(() => { locked = false; lastY = Math.max(0, scrollY); acc = 0; }, 300);
+  };
+
+  const evaluate = () => {
+    ticking = false;
+    const y = Math.max(0, scrollY);
+    const dy = y - lastY;
     lastY = y;
+    if (locked) return;                  // still settling after a toggle
+    if (y < 120) { setCompact(false); acc = 0; return; }
+    // reset the accumulator on any direction change, so a jitter or a hand
+    // hovering near the threshold never builds up enough to flip the state
+    if ((dy > 0) !== (acc > 0)) acc = 0;
+    acc += dy;
+    if (acc > 40 && y > 200) setCompact(true);   // sustained scroll down
+    else if (acc < -40) setCompact(false);        // sustained scroll up
+  };
+
+  addEventListener('scroll', () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(evaluate); }
   }, { passive: true });
 
   initPinch();
