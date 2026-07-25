@@ -14,6 +14,12 @@ const SOURCES = [
 // daily workflow (see tools/check-streams.mjs) commits status.json, and both
 // the Vercel and Pages copies pick it up without either having to rebuild.
 const STATUS_URL = 'https://raw.githubusercontent.com/xereon/telly-iptv/main/status.json';
+// Hiding "dead" channels is OFF: the check runs from a single US CI runner, so
+// geo-blocks, temporary outages, User-Agent gating and (while the relay is down)
+// proxied streams all look dead when they play fine for the user. It hid working
+// channels, so we show everything and let a stream prove itself in the player.
+// status.json's noCors list is still used for proxy routing — that's separate.
+const HIDE_DEAD = false;
 const CACHE_KEY = 'telly.channels.v2'; // v2: religious channels excluded
 const PREFS_KEY = 'telly.prefs.v1';
 const FAVS_KEY  = 'telly.favs.v1';
@@ -313,8 +319,8 @@ async function fetchStatus() {
     if (!r.ok) return;
     const s = await r.json();
     if (!Array.isArray(s.dead)) return;
-    state.dead = new Set(s.dead);
-    state.noCors = new Set(s.noCors || []);
+    if (HIDE_DEAD) state.dead = new Set(s.dead);  // otherwise nothing is hidden
+    state.noCors = new Set(s.noCors || []);       // still used for proxy routing
     state.statusAt = s.generated || null;
   } catch { /* no status data — nothing gets hidden */ }
 }
